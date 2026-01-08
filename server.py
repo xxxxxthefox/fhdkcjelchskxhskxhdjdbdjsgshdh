@@ -1,19 +1,24 @@
-import os
+import requests
+import threading
 import random
 import time
 import secrets
+import os
 import uuid
-import requests
+import re
+import json
+import datetime
+from urllib.parse import urlencode
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import SignerPy
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import SignerPy  # تأكد من أنك مثبت SignerPy في requirements.txt
 
+# إنشاء تطبيق Flask
 app = Flask(__name__)
-CORS(app)  # السماح لأي موقع بالوصول
+CORS(app)  # السماح لأي موقع بالوصول (CORS)
 
-# ===================== TikTok API =====================
-
+# --- TikTok API Class ---
 class TikTokAPI:
     HOSTS = [
         "api16-normal-c-alisg.tiktokv.com", "api.tiktokv.com", "api-h2.tiktokv.com",
@@ -30,7 +35,7 @@ class TikTokAPI:
         "api16-normal.tiktokv.com", "api16-normal.ttapis.com",
         "api19-normal-zr.tiktokv.com", "api16-normal-zr.tiktokv.com",
         "api16-normal-apix.tiktokv.com", "api74-normal.tiktokv.com",
-        "api32-normal-zr.tiktokv.com", "api23-normal.tiktokv.com",
+        "api32-normal-zr.tiktokv.com", "api23-normal-tiktokv.com",
         "api32-normal.tiktokv.com", "api16-normal-quic.tiktokv.com",
         "api-normal.tiktokv.com", "api16-normal-apix-quic.tiktokv.com",
         "api19-normal.tiktokv.com", "api31-normal-cost-mys.tiktokv.com",
@@ -40,12 +45,12 @@ class TikTokAPI:
     ]
 
     @staticmethod
-    def send_single_request(host, username):
+    def send_single_request(host, username, attempt_num):
         try:
             secret = secrets.token_hex(16)
             cookies = {"passport_csrf_token": secret, "passport_csrf_token_default": secret}
 
-            params = {
+            params_step1 = {
                 'request_tag_from': "h5", 'manifest_version_code': "410203",
                 '_rticket': str(int(time.time() * 1000)), 'app_language': "ar",
                 'app_type': "normal", 'iid': str(random.randint(1, 10**19)),
@@ -64,11 +69,12 @@ class TikTokAPI:
                 'use_store_region_cookie': "1"
             }
 
-            url = f"https://{host}/passport/find_account/tiktok_username/?" + '&'.join([f"{k}={v}" for k,v in params.items()])
-            payload = {'mix_mode': "1", 'username': username}
-            signature = SignerPy.sign(params=url, payload=payload, version=4404)
+            url_step1 = f"https://{host}/passport/find_account/tiktok_username/?" + urlencode(params_step1)
+            payload_step1 = {'mix_mode': "1", 'username': username}
 
-            headers = {
+            signature = SignerPy.sign(params=url_step1, payload=payload_step1, version=4404)
+
+            headers_step1 = {
                 'User-Agent': "com.zhiliaoapp.musically.go/410203 (Linux; U; Android 14; ar; RMX3834; Build/UP1A.231005.007;tt-ok/3.12.13.44.lite-ul)",
                 'x-ss-req-ticket': signature['x-ss-req-ticket'],
                 'x-ss-stub': signature['x-ss-stub'],
@@ -81,35 +87,60 @@ class TikTokAPI:
                 'x-vc-bdturing-sdk-version': "2.3.15.i18n", 'ttzip-tlb': "1",
             }
 
-            res = requests.post(url, data=payload, headers=headers, cookies=cookies, timeout=15)
-            data_json = res.json()
+            response_step1 = requests.post(url_step1, data=payload_step1, headers=headers_step1, cookies=cookies, timeout=15)
+            response_json_step1 = response_step1.json()
 
-            if 'success' in data_json.get("message", ""):
-                d = data_json.get('data', {})
-                return {
-                    'message': 'success',
-                    'data': {
-                        'has_email': d.get('has_email', False),
-                        'has_mobile': d.get('has_mobile', False),
-                        'has_oauth': d.get('has_oauth', False),
-                        'has_passkey': d.get('has_passkey', False),
-                        'oauth_platforms': d.get('oauth_platforms', [])
-                    }
+            if "token" in response_json_step1.get("data", {}):
+                token = response_json_step1["data"]["token"]
+                params_step2 = params_step1.copy()
+                params_step2['not_login_ticket'] = token
+                params_step2['ts'] = str(int(time.time()))
+                params_step2['_rticket'] = str(int(time.time() * 1000))
+
+                url_step2 = f"https://{host}/passport/auth/available_ways/?" + urlencode(params_step2)
+                signature_step2 = SignerPy.sign(params=url_step2, payload=None, version=4404)
+
+                headers_step2 = {
+                    'User-Agent': headers_step1['User-Agent'],
+                    'x-ss-req-ticket': signature_step2['x-ss-req-ticket'],
+                    'x-ss-stub': signature_step2['x-ss-stub'],
+                    'x-gorgon': signature_step2["x-gorgon"],
+                    'x-khronos': signature_step2["x-khronos"],
+                    'x-tt-passport-csrf-token': cookies['passport_csrf_token'],
+                    'passport_csrf_token': cookies['passport_csrf_token'],
+                    'content-type': "application/x-www-form-urlencoded",
+                    'x-ss-dp': "1340", 'sdk-version': "2", 'x-tt-ultra-lite': "1",
                 }
-            elif "verify_center_decision_conf" in res.text:
+
+                res_step2 = requests.post(url_step2, headers=headers_step2, cookies=cookies, timeout=15)
+                response_json_step2 = res_step2.json()
+
+                if 'success' in response_json_step2.get("message", ""):
+                    data = response_json_step2.get('data', {})
+                    return {
+                        'data': {
+                            'has_email': data.get('has_email', False),
+                            'has_mobile': data.get('has_mobile', False),
+                            'has_oauth': data.get('has_oauth', False),
+                            'has_passkey': data.get('has_passkey', False),
+                            'oauth_platforms': data.get('oauth_platforms', [])
+                        },
+                        'message': 'success'
+                    }
+            elif "verify_center_decision_conf" in response_step1.text:
                 return {"message": "error", "status": "captcha"}
             else:
                 return {"message": "error", "status": "user not found"}
-
         except:
             return {"message": "error", "status": "request_failed"}
+        return {"message": "error", "status": "unknown"}
 
     @staticmethod
     def send_with_threading(username, max_workers=15):
         successful_responses = []
 
         def worker(host):
-            result = TikTokAPI.send_single_request(host, username)
+            result = TikTokAPI.send_single_request(host, username, 1)
             if result.get('message') == 'success':
                 successful_responses.append(result)
             return result
@@ -117,26 +148,28 @@ class TikTokAPI:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(worker, host): host for host in TikTokAPI.HOSTS}
             for future in as_completed(futures):
-                if successful_responses: break
+                if successful_responses:
+                    break  # توقف عند أول نجاح
 
         return successful_responses[0] if successful_responses else {"message": "error", "status": "failed"}
 
-# ===================== Flask Routes =====================
+# --- End TikTokAPI Class ---
 
-@app.route("/")
+# صفحة رئيسية للتأكد من عمل السيرفر
+@app.route("/", methods=["GET"])
 def home():
     return "🚀 TikTok API Server is Running!"
 
-@app.route("/check")
-def check():
-    username = request.args.get("username")
+# نقطة النهاية /check لاستدعاء API
+@app.route("/check", methods=["GET"])
+def check_user():
+    username = request.args.get("username", "").strip()
     if not username:
-        return jsonify({"status": "failed", "error": "No username provided"}), 400
+        return jsonify({"status": "failed", "message": "No username provided"}), 400
 
     result = TikTokAPI.send_with_threading(username)
-    return jsonify({"username": username, **result})
+    return jsonify(result)
 
-# ===================== Run Server =====================
-
+# تشغيل التطبيق
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
