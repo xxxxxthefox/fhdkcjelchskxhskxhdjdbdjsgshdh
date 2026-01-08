@@ -84,7 +84,6 @@ class TikTokAPI:
             res = requests.post(url, data=payload, headers=headers, cookies=cookies, timeout=15)
             data_json = res.json()
 
-            # إذا نجح الفحص
             if 'success' in data_json.get("message", ""):
                 d = data_json.get('data', {})
                 return {
@@ -94,23 +93,16 @@ class TikTokAPI:
                         'has_mobile': d.get('has_mobile', False),
                         'has_oauth': d.get('has_oauth', False),
                         'has_passkey': d.get('has_passkey', False),
-                        'oauth_platforms': d.get('oauth_platforms', []),
-                        'nickname': d.get('nickname', ""),
-                        'unique_id': d.get('unique_id', ""),
-                        'follower_count': d.get('follower_count', 0),
-                        'following_count': d.get('following_count', 0),
-                        'is_verified': d.get('is_verified', False),
-                        'status': 'found'
+                        'oauth_platforms': d.get('oauth_platforms', [])
                     }
                 }
-
             elif "verify_center_decision_conf" in res.text:
                 return {"message": "error", "status": "captcha"}
             else:
                 return {"message": "error", "status": "user not found"}
 
-        except Exception as e:
-            return {"message": "error", "status": "request_failed", "error": str(e)}
+        except:
+            return {"message": "error", "status": "request_failed"}
 
     @staticmethod
     def send_with_threading(username, max_workers=15):
