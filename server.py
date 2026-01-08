@@ -6,13 +6,13 @@ import uuid
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import SignerPy
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import SignerPy  # تأكد من أنك أضفتها في requirements.txt
 
 app = Flask(__name__)
 CORS(app)  # السماح لأي موقع بالوصول
 
-# ===================== TikTok API Settings =====================
+# ===================== TikTok API =====================
 
 class TikTokAPI:
     HOSTS = [
@@ -45,7 +45,7 @@ class TikTokAPI:
             secret = secrets.token_hex(16)
             cookies = {"passport_csrf_token": secret, "passport_csrf_token_default": secret}
 
-            params_step1 = {
+            params = {
                 'request_tag_from': "h5", 'manifest_version_code': "410203",
                 '_rticket': str(int(time.time() * 1000)), 'app_language': "ar",
                 'app_type': "normal", 'iid': str(random.randint(1, 10**19)),
@@ -64,12 +64,11 @@ class TikTokAPI:
                 'use_store_region_cookie': "1"
             }
 
-            url_step1 = f"https://{host}/passport/find_account/tiktok_username/?" + requests.utils.requote_uri('&'.join([f"{k}={v}" for k,v in params_step1.items()]))
-            payload_step1 = {'mix_mode': "1", 'username': username}
+            url = f"https://{host}/passport/find_account/tiktok_username/?" + '&'.join([f"{k}={v}" for k,v in params.items()])
+            payload = {'mix_mode': "1", 'username': username}
+            signature = SignerPy.sign(params=url, payload=payload, version=4404)
 
-            signature = SignerPy.sign(params=url_step1, payload=payload_step1, version=4404)
-
-            headers_step1 = {
+            headers = {
                 'User-Agent': "com.zhiliaoapp.musically.go/410203 (Linux; U; Android 14; ar; RMX3834; Build/UP1A.231005.007;tt-ok/3.12.13.44.lite-ul)",
                 'x-ss-req-ticket': signature['x-ss-req-ticket'],
                 'x-ss-stub': signature['x-ss-stub'],
@@ -82,30 +81,47 @@ class TikTokAPI:
                 'x-vc-bdturing-sdk-version': "2.3.15.i18n", 'ttzip-tlb': "1",
             }
 
-            response_step1 = requests.post(url_step1, data=payload_step1, headers=headers_step1, cookies=cookies, timeout=15)
-            response_json_step1 = response_step1.json()
+            res = requests.post(url, data=payload, headers=headers, cookies=cookies, timeout=15)
+            data_json = res.json()
 
-            if "token" in response_json_step1.get("data", {}):
-                token = response_json_step1["data"]["token"]
-                return {"message": "success", "token": token}
-            elif "verify_center_decision_conf" in response_step1.text:
+            # إذا نجح الفحص
+            if 'success' in data_json.get("message", ""):
+                d = data_json.get('data', {})
+                return {
+                    'message': 'success',
+                    'data': {
+                        'has_email': d.get('has_email', False),
+                        'has_mobile': d.get('has_mobile', False),
+                        'has_oauth': d.get('has_oauth', False),
+                        'has_passkey': d.get('has_passkey', False),
+                        'oauth_platforms': d.get('oauth_platforms', []),
+                        'nickname': d.get('nickname', ""),
+                        'unique_id': d.get('unique_id', ""),
+                        'follower_count': d.get('follower_count', 0),
+                        'following_count': d.get('following_count', 0),
+                        'is_verified': d.get('is_verified', False),
+                        'status': 'found'
+                    }
+                }
+
+            elif "verify_center_decision_conf" in res.text:
                 return {"message": "error", "status": "captcha"}
             else:
                 return {"message": "error", "status": "user not found"}
 
-        except:
-            return {"message": "error", "status": "request_failed"}
+        except Exception as e:
+            return {"message": "error", "status": "request_failed", "error": str(e)}
 
     @staticmethod
     def send_with_threading(username, max_workers=15):
         successful_responses = []
+
         def worker(host):
             result = TikTokAPI.send_single_request(host, username)
             if result.get('message') == 'success':
                 successful_responses.append(result)
             return result
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(worker, host): host for host in TikTokAPI.HOSTS}
             for future in as_completed(futures):
